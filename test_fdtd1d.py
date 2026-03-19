@@ -23,16 +23,12 @@ def test_fdtd_solves_basic_propagation():
 
     e_expected = 0.5 * gaussian(x, -t_final*C, sigma) \
      + 0.5 * gaussian(x, t_final*C, sigma)
-<<<<<<< HEAD
-    
-    assert np.allclose(e_solved, e_expected)
-=======
+
 
     plt.plot(x, e_solved)
     plt.plot(x, e_expected)
 
     assert np.corrcoef(e_solved, e_expected)[0,1] > 0.99
->>>>>>> 7e9f48d4849136798d8554ed94a945b42f3a3f13
 
 
 def test_fdtd_PEC_boundary_conditions():
