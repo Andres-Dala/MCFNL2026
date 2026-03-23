@@ -112,6 +112,32 @@ def test_fdtd_periodic_boundary_conditions():
     assert np.allclose(h_solved, h_expected, atol=1e-2)
 
 
+def test_fdtd_TF_SF():
+    xMin, xMax = -1.0, 1.0
+    L = xMax - xMin
+    x = np.linspace(xMin, xMax, 201)
+    x0 = 0.0
+    sigma = 0.05
+    initial_e = gaussian(x, x0, sigma)
+
+    fdtd_incident = FDTD1D(x, boundaries=('periodic', 'periodic'))
+    fdtd_incident.load_initial_field(initial_e)
+    fdtd_incident.run_until(L / C)
+    e_incident = fdtd_incident.get_e()
+    h_incident = fdtd_incident.get_h()
+    fdtd_total = FDTD1D(x, boundaries=('PEC', 'PEC'))
+    fdtd_total.load_initial_field(initial_e)
+    fdtd_total.run_until(L / C)
+    e_total = fdtd_total.get_e()
+    h_total = fdtd_total.get_h()
+
+    e_scattered = e_total - e_incident
+    h_scattered = h_total - h_incident
+
+    np.testing.assert_allclose(e_incident, initial_e, atol=1e-2)
+    np.testing.assert_allclose(e_total, -initial_e, atol=1e-2)
+    np.testing.assert_allclose(e_scattered, -2.0 * initial_e, atol=1e-2)
+    np.testing.assert_allclose(h_scattered, -h_incident, atol=1e-2)
 
 
 def test_fdtd_mur_boundary_conditions():
@@ -143,3 +169,4 @@ def test_fdtd_mur_boundary_conditions():
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
