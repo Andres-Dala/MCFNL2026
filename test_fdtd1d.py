@@ -112,6 +112,10 @@ def test_fdtd_mur_boundary_conditions():
     assert np.allclose(e_solved, 0.0, atol=1e-2)
     assert np.allclose(h_solved, 0.0, atol=1e-2)
 
+def test_fdtd_dissipative():
+    
+
+
 
 if __name__ == "__main__":
     pytest.main([__file__])
