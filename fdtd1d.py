@@ -1,4 +1,5 @@
 import numpy as np
+import matplotlib.pyplot as plt
 
 C = 1.0
 
@@ -9,11 +10,11 @@ class FDTD1D:
     mu0 = 1.0
     eps0 = 1.0  
     
-    def __init__(self, x, boundaries=None):
+    def __init__(self, x, boundaries=None, x_o=None, pert=None):
         self.x = x
-        self.xH = (self.x[:1] + self.x[:-1]) / 2.0
+        self.xH = (self.x[1:] + self.x[:-1]) / 2.0
         self.dx = x[1] - x[0]
-        self.dt = self.dx / C  
+        self.dt = self.dx/C
         self.N = len(x)
         self.e = np.zeros(self.N)
         self.h = np.zeros(self.N - 1) 
@@ -23,10 +24,14 @@ class FDTD1D:
         self.sig = np.zeros(self.N)
         self.eps_r = np.ones(self.N)      
         self.eps = self.eps0 * self.eps_r  
+        self.x_o = x_o
+        self.pert = pert
 
+    # Cambia el estado del campo inicial a lo que se le pase
     def load_initial_field(self, e0):
         self.e = e0.copy()
-        
+    
+    # Función de actualización
     def _step(self):
         r = self.dt / self.dx
         
@@ -59,9 +64,17 @@ class FDTD1D:
             if self.boundaries[1] == 'mur':
                 mur_coeff = (C * self.dt - self.dx) / (C * self.dt + self.dx)
                 self.e[-1] = e_old_right_1 + mur_coeff * (self.e[-2] - e_old_right_0)
+            if self.boundaries[0] == 'PMC':
+                self.e[0] += 2*r*self.h[0] 
+            if self.boundaries[1] == 'PMC':
+                self.e[-1] += -2*r*self.h[-1] 
+
+        if self.pert is not None and self.x_o is not None:
+            idx = np.argmin(np.abs(self.x - self.x_o))
+            self.e[idx] = self.pert(self.t)
 
         self.h += r * (self.e[1:] - self.e[:-1])
-    
+        
         self.t += self.dt   
 
     def run_until(self, t_final):
@@ -69,7 +82,7 @@ class FDTD1D:
         for _ in range(n_steps):
             self._step()
         self.t = t_final  
-
+        
     def get_e(self):
         return self.e.copy()
 
