@@ -210,5 +210,97 @@ def test_fdtd_dissipative_exact():
     assert np.allclose(e_solved, e_expected, atol=1e-2)
     assert np.allclose(h_solved, h_expected, atol=1e-2)
 
+
+def test_fdtd_dielectric_reflection():
+    L = 4.0
+    N = 2001
+    x = np.linspace(0, L, N)
+    xH = (x[1:] + x[:-1]) / 2.0
+    dx = x[1] - x[0]
+    dt = dx / C
+    
+    boundaries = ('mur', 'mur')
+
+    fdtd = FDTD1D(x, boundaries)
+
+    eps_r_1 = 1.0   
+    eps_r_2 = 4.0   
+    interface_pos = L / 2
+    
+    fdtd.eps_r = np.where(x < interface_pos, eps_r_1, eps_r_2)
+    fdtd.sig = np.zeros_like(x) 
+
+    eta_1 = 1.0 / np.sqrt(eps_r_1)  # = 1
+    eta_2 = 1.0 / np.sqrt(eps_r_2)  # = 0.5
+    R_theory = (eta_1 - eta_2) / (eta_1 + eta_2)
+
+    x0 = 1.0
+    sigma = 0.05
+    initial_e = gaussian(x, x0, sigma)
+    initial_h = gaussian(xH, x0, sigma) / eta_1
+
+    E_inc_max = np.max(initial_e)
+
+    fdtd.load_initial_field(initial_e)
+    fdtd.h = initial_h.copy()
+
+    x_obs = 0.5
+    obs_idx = np.argmin(np.abs(x - x_obs))
+
+    t_at_interface = (interface_pos - x0) / C
+    t_ref_at_obs = t_at_interface + (interface_pos - x[obs_idx]) / C
+
+    t_final = 2 * interface_pos / C
+    n_steps = int(t_final / dt)
+    
+    E_ref_max_observed = 0.0
+    
+    for _ in range(n_steps):
+        fdtd._step()
+        if fdtd.t > t_ref_at_obs - 0.1:
+            E_at_obs = np.abs(fdtd.e[obs_idx])
+            E_ref_max_observed = max(E_ref_max_observed, E_at_obs)
+
+    R_numerical = E_ref_max_observed / E_inc_max
+
+    assert np.abs(R_numerical - np.abs(R_theory)) < 0.02
+
+
+def test_fdtd_cfl_condition():
+    x = np.linspace(-1, 1, 201)
+    dx = x[1] - x[0]
+    L = x[-1] - x[0]
+    C = 1.0
+    
+    x0 = 0.0
+    sigma = 0.1
+    initial_e = gaussian(x, x0, sigma)
+    
+    # 1. Test de Estabilidad (CFL exacto: dt = dx/C)
+    fdtd = FDTD1D(x)
+    fdtd.load_initial_field(initial_e)
+    
+    t_long = L / C 
+    fdtd.run_until(t_long)
+    
+    e_final = fdtd.get_e()
+    
+    assert np.all(np.isfinite(e_final)), "La simulación divergió en el límite CFL"
+    assert np.max(np.abs(e_final)) <= np.max(initial_e) * 1.01 
+
+    # --- 2. Test de Inestabilidad (CFL > 1) ---
+    fdtd_unstable = FDTD1D(x)
+    fdtd_unstable.load_initial_field(initial_e)
+    
+    fdtd_unstable.dt = (dx / 1.0) * 1.1 
+    fdtd_unstable.run_until(fdtd_unstable.t + 100 * fdtd_unstable.dt)
+    
+    e_unstable = fdtd_unstable.get_e()
+
+    has_diverged = np.any(np.isnan(e_unstable)) or np.max(np.abs(e_unstable)) > 1e10
+    
+    assert has_diverged, "La simulación debería haber divergido con CFL > 1"
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
