@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import pytest
-from fdtd1d import FDTD1D, C, gaussian, panel_transfer_matrix, RT_from_transfer_matrix
+from fdtd1d import FDTD1D, C, gaussian, panel_transfer_matrix, RT_from_transfer_matrix, stack_transfer_matrix
 
 
 
@@ -112,7 +112,7 @@ def test_fdtd_PMC_boundary_conditions():
     assert np.corrcoef(h_solved, h_expected)[0,1] > 0.99
     assert np.max(np.abs(e_solved - e_expected)) < 1e-8
 
-def test_fdtd_total_spread_field():
+def test_fdtd_perturbation():
     xMax = 1
     xMin = -1
     L = xMax - xMin
@@ -124,21 +124,56 @@ def test_fdtd_total_spread_field():
     initial_e = np.zeros_like(x)
 
     def my_pert(t):
-        return np.sin(t*np.pi)
-
+        return np.sin(2*np.pi*2*C/L*t)
+    
     fdtd = FDTD1D(x,boundaries,x_o,pert = lambda t: my_pert(t))
     fdtd.load_initial_field(initial_e)
-    t_final = L / C
+    t_final = L / (2*C) 
     fdtd.run_until(t_final)
 
     e_solved = fdtd.get_e()
     h_solved = fdtd.get_h()
-
-    e_expected = my_pert(x - L)
-    h_expected = -my_pert(xH - L)
     
-    assert np.corrcoef(e_solved, e_expected)[0,1] > -0.6
-    assert np.corrcoef(h_solved, h_expected)[0,1] > 0.8
+    e_expected = my_pert(L/C/2 - np.abs(x)/C)/2
+    h_expected = my_pert(L/C/2 - xH/C)/2
+    plt.plot(xH,h_expected)
+    plt.show()
+
+    assert np.allclose(e_solved, e_expected, atol=1e-1)
+    assert np.allclose(h_solved, h_expected, atol=1e-1)
+
+def test_fdtd_eh_perturbation():
+    xMax = 1
+    xMin = -1
+    L = xMax - xMin
+
+    x = np.linspace(xMin,xMax,201)
+    xH = (x[1:] + x[:-1]) / 2.0
+    boundaries = ('mur','mur') 
+    x_o = 0
+    initial_e = np.zeros_like(x)
+
+    def my_pert(t):
+        #return np.sin(2*np.pi*2*C/L*t)
+        return gaussian(t, 0.1, 0.02)
+    fdtd = FDTD1D(x,boundaries,x_o,pert = lambda t: my_pert(t), pert_dir = True)
+    fdtd.load_initial_field(initial_e)
+    t_final = L / (2*C) 
+    fdtd.run_until(t_final)
+
+    e_solved = fdtd.get_e()
+    h_solved = fdtd.get_h()
+    
+    e_expected = my_pert(L/C/2 - np.abs(x)/C)
+    h_expected = my_pert(L/C/2 - xH/C)
+
+    e_expected[x<0.1] = 0
+    h_expected[xH<0.1] = 0
+    plt.plot(x,e_expected)
+    plt.show()
+
+    assert np.allclose(e_solved, e_expected, atol=1e-3)
+    assert np.allclose(h_solved, h_expected, atol=1e-3)
 
 def test_fdtd_mur_boundary_conditions():
     xMax = 1
@@ -210,6 +245,7 @@ def test_fdtd_dissipative_exact():
     assert np.allclose(e_solved, e_expected, atol=1e-2)
     assert np.allclose(h_solved, h_expected, atol=1e-2)
 
+<<<<<<< revision_rodrigo
 def test_fdtd_conductive_panel_reflection():
     L = 4.0
     N = 4001
@@ -286,5 +322,87 @@ def test_fdtd_conductive_panel_reflection():
     assert np.corrcoef(np.abs(T_fdtd[band]), np.abs(T_anal))[0, 1] > 0.90
 
 
+def test_fdtd_multilayer_panel_anisotropic_reflection():
+    L = 4.0
+    N = 4001
+    x = np.linspace(0, L, N)
+    xH = (x[1:] + x[:-1]) / 2.0
+    boundaries = ('mur', 'mur')
+
+    pulse_x0 = 0.8
+    sigma = 0.06
+
+    panel_left = 1.9
+    layer_d1 = 0.1
+    layer_d2 = 0.2
+    panel_right = panel_left + layer_d1 + layer_d2
+    eps_r_layer1 = 2.0
+    mu_r_layer1 = 1.1
+    eps_r_layer2 = 5.0
+    mu_r_layer2 = 1.4
+
+    obs_left_idx = np.argmin(np.abs(x - (panel_left - 0.4)))
+    obs_right_idx = np.argmin(np.abs(x - (panel_right + 0.4)))
+
+    initial_e = gaussian(x, pulse_x0, sigma)
+    initial_h = gaussian(xH, pulse_x0, sigma)
+
+    t_final = 2.5 * L
+
+    fdtd = FDTD1D(x, boundaries)
+    fdtd.load_initial_field(initial_e)
+    fdtd.h = initial_h.copy()
+    fdtd.eps_r = np.ones_like(x)
+    fdtd.mu_r = np.ones_like(xH)
+    fdtd.eps_r[(x >= panel_left) & (x < panel_left + layer_d1)] = eps_r_layer1
+    fdtd.mu_r[(xH >= panel_left) & (xH < panel_left + layer_d1)] = mu_r_layer1
+    fdtd.eps_r[(x >= panel_left + layer_d1) & (x <= panel_right)] = eps_r_layer2
+    fdtd.mu_r[(xH >= panel_left + layer_d1) & (xH <= panel_right)] = mu_r_layer2
+
+    n_steps = round(t_final / fdtd.dt)
+    E_left_panel = np.zeros(n_steps)
+    E_right_panel = np.zeros(n_steps)
+    for i in range(n_steps):
+        fdtd._step()
+        E_left_panel[i] = fdtd.e[obs_left_idx]
+        E_right_panel[i] = fdtd.e[obs_right_idx]
+
+    fdtd_ref = FDTD1D(x, boundaries)
+    fdtd_ref.load_initial_field(initial_e)
+    fdtd_ref.h = initial_h.copy()
+
+    E_left_ref = np.zeros(n_steps)
+    E_right_ref = np.zeros(n_steps)
+    for i in range(n_steps):
+        fdtd_ref._step()
+        E_left_ref[i] = fdtd_ref.e[obs_left_idx]
+        E_right_ref[i] = fdtd_ref.e[obs_right_idx]
+
+    dt = fdtd.dt
+    E_ref_fft = np.fft.rfft(E_left_panel - E_left_ref)
+    E_trans_fft = np.fft.rfft(E_right_panel)
+    E_inc_fft = np.fft.rfft(E_right_ref)
+    freq = np.fft.rfftfreq(n_steps, d=dt)
+
+    valid = np.abs(E_inc_fft) > 1e-10 * np.max(np.abs(E_inc_fft))
+    R_fdtd = np.zeros_like(freq, dtype=complex)
+    T_fdtd = np.zeros_like(freq, dtype=complex)
+    R_fdtd[valid] = E_ref_fft[valid] / E_inc_fft[valid]
+    T_fdtd[valid] = E_trans_fft[valid] / E_inc_fft[valid]
+
+    layers = [
+        {'d': layer_d1, 'eps_zz': eps_r_layer1, 'mu_yy': mu_r_layer1},
+        {'d': layer_d2, 'eps_zz': eps_r_layer2, 'mu_yy': mu_r_layer2},
+    ]
+    band = (freq > 0.1) & (freq < 2.0)
+    Phi = stack_transfer_matrix(freq[band], layers)
+    R_anal, T_anal = RT_from_transfer_matrix(Phi)
+
+    assert np.corrcoef(np.abs(R_fdtd[band]), np.abs(R_anal))[0, 1] > 0.90
+    assert np.corrcoef(np.abs(T_fdtd[band]), np.abs(T_anal))[0, 1] > 0.90
+
+
+=======
+>>>>>>> rod_rev
 if __name__ == "__main__":
     pytest.main([__file__])
