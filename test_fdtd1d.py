@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import pytest
-from fdtd1d import FDTD1D, C, gaussian, panel_transfer_matrix, RT_from_transfer_matrix
+from fdtd1d import FDTD1D, C, gaussian, panel_transfer_matrix, RT_from_transfer_matrix, stack_transfer_matrix
 
 
 
@@ -280,6 +280,96 @@ def test_fdtd_conductive_panel_reflection():
     band = (freq > 0.1) & (freq < 1.5 * f_bw)
 
     Phi = panel_transfer_matrix(freq[band], panel_d, eps_r_panel, sigma_panel)
+    R_anal, T_anal = RT_from_transfer_matrix(Phi)
+
+    assert np.corrcoef(np.abs(R_fdtd[band]), np.abs(R_anal))[0, 1] > 0.90
+    assert np.corrcoef(np.abs(T_fdtd[band]), np.abs(T_anal))[0, 1] > 0.90
+
+
+def test_fdtd_multilayer_panel_reflection():
+    L = 4.0
+    N = 4001
+    x = np.linspace(0, L, N)
+    xH = (x[1:] + x[:-1]) / 2.0
+    boundaries = ('mur', 'mur')
+
+    pulse_x0 = 0.8
+    sigma = 0.06
+
+    # Define 3-layer stack centered at L/2
+    layers = [
+        {'d': 0.08, 'eps_r': 4.0, 'sigma': 0.0},
+        {'d': 0.04, 'eps_r': 1.0, 'sigma': 0.5},
+        {'d': 0.08, 'eps_r': 4.0, 'sigma': 0.0},
+    ]
+    total_d = sum(lay['d'] for lay in layers)
+    panel_center = L / 2
+    panel_left = panel_center - total_d / 2
+    panel_right = panel_center + total_d / 2
+
+    obs_left_idx = np.argmin(np.abs(x - (panel_left - 0.4)))
+    obs_right_idx = np.argmin(np.abs(x - (panel_right + 0.4)))
+
+    initial_e = gaussian(x, pulse_x0, sigma)
+    initial_h = gaussian(xH, pulse_x0, sigma)
+
+    t_final = 2.5 * L
+
+    # Build spatially-varying eps_r and sigma for the multilayer
+    eps_r_arr = np.ones_like(x)
+    sig_arr = np.zeros_like(x)
+    edge = panel_left
+    for lay in layers:
+        mask = (x >= edge) & (x < edge + lay['d'])
+        eps_r_arr[mask] = lay['eps_r']
+        sig_arr[mask] = lay['sigma']
+        edge += lay['d']
+
+    # Simulation WITH multilayer panel
+    fdtd = FDTD1D(x, boundaries)
+    fdtd.load_initial_field(initial_e)
+    fdtd.h = initial_h.copy()
+    fdtd.eps_r = eps_r_arr
+    fdtd.sig = sig_arr
+
+    n_steps = round(t_final / fdtd.dt)
+    E_left_panel = np.zeros(n_steps)
+    E_right_panel = np.zeros(n_steps)
+    for i in range(n_steps):
+        fdtd._step()
+        E_left_panel[i] = fdtd.e[obs_left_idx]
+        E_right_panel[i] = fdtd.e[obs_right_idx]
+
+    # Reference simulation WITHOUT panel (free space)
+    fdtd_ref = FDTD1D(x, boundaries)
+    fdtd_ref.load_initial_field(initial_e)
+    fdtd_ref.h = initial_h.copy()
+
+    E_left_ref = np.zeros(n_steps)
+    E_right_ref = np.zeros(n_steps)
+    for i in range(n_steps):
+        fdtd_ref._step()
+        E_left_ref[i] = fdtd_ref.e[obs_left_idx]
+        E_right_ref[i] = fdtd_ref.e[obs_right_idx]
+
+    # Extract R(f), T(f) via FFT
+    dt = fdtd.dt
+    E_ref_fft = np.fft.rfft(E_left_panel - E_left_ref)
+    E_trans_fft = np.fft.rfft(E_right_panel)
+    E_inc_fft = np.fft.rfft(E_right_ref)
+    freq = np.fft.rfftfreq(n_steps, d=dt)
+
+    valid = np.abs(E_inc_fft) > 1e-10 * np.max(np.abs(E_inc_fft))
+    R_fdtd = np.zeros_like(freq, dtype=complex)
+    T_fdtd = np.zeros_like(freq, dtype=complex)
+    R_fdtd[valid] = E_ref_fft[valid] / E_inc_fft[valid]
+    T_fdtd[valid] = E_trans_fft[valid] / E_inc_fft[valid]
+
+    # Analytical R(f), T(f) via stack transfer matrix
+    f_bw = 1.0 / (2.0 * np.pi * sigma)
+    band = (freq > 0.1) & (freq < 1.5 * f_bw)
+
+    Phi = stack_transfer_matrix(freq[band], layers)
     R_anal, T_anal = RT_from_transfer_matrix(Phi)
 
     assert np.corrcoef(np.abs(R_fdtd[band]), np.abs(R_anal))[0, 1] > 0.90
