@@ -56,12 +56,12 @@ class FDTD1D:
 
     def _step(self):
         r = self.dt / self.dx
-
         self.eps = self.eps0 * self.eps_r
 
         ca = (2 * self.eps - self.sig * self.dt) / (2 * self.eps + self.sig * self.dt)
         cb = (2 * self.dt / self.dx) / (2 * self.eps + self.sig * self.dt)
 
+        # 1. Guardar valores para Mur
         if self.boundaries is not None:
             if self.boundaries[0] == 'mur':
                 e_old_left_0 = self.e[0]
@@ -70,17 +70,20 @@ class FDTD1D:
                 e_old_right_0 = self.e[-1]
                 e_old_right_1 = self.e[-2]
 
-        if self.pert_dir and self.pert is not None and self.x_o is not None and self.t != 0.0:
-            idx = np.argmin(np.abs(self.xH - self.x_o))
-            self.h[idx] += self.pert(self.t)
-
+        # 2. Actualizar E
         self.e[1:-1] = ca[1:-1] * self.e[1:-1] - cb[1:-1] * (self.h[1:] - self.h[:-1])
 
+        # --- TF/SF: CORRECCIÓN PARA E ---
+        # Se aplica al nodo E en la frontera (inicio de la región Total Field)
+        if self.pert is not None and self.x_o is not None:
+            idx_e = np.argmin(np.abs(self.x - self.x_o))
+            # Al actualizar E_TF, lee un H_SF. Debemos sumar el H incidente que le falta.
+            self.e[idx_e] += cb[idx_e] * self.pert(self.t + self.dt)
+
+        # 3. Aplicar condiciones de contorno
         if self.boundaries is not None:
-            if self.boundaries[0] == 'PEC':
-                self.e[0] = 0.0
-            if self.boundaries[1] == 'PEC':
-                self.e[-1] = 0.0
+            if self.boundaries[0] == 'PEC': self.e[0] = 0.0
+            if self.boundaries[1] == 'PEC': self.e[-1] = 0.0
             if self.boundaries[0] == 'periodic':
                 self.e[0] = ca[0] * self.e[0] - cb[0] * (self.h[0] - self.h[-1])
                 self.e[-1] = self.e[0]
@@ -90,16 +93,19 @@ class FDTD1D:
             if self.boundaries[1] == 'mur':
                 mur_coeff = (C * self.dt - self.dx) / (C * self.dt + self.dx)
                 self.e[-1] = e_old_right_1 + mur_coeff * (self.e[-2] - e_old_right_0)
-            if self.boundaries[0] == 'PMC':
-                self.e[0] -= 2 * r * self.h[0]
-            if self.boundaries[1] == 'PMC':
-                self.e[-1] += 2 * r * self.h[-1]
+            if self.boundaries[0] == 'PMC': self.e[0] -= 2 * r * self.h[0]
+            if self.boundaries[1] == 'PMC': self.e[-1] += 2 * r * self.h[-1]
 
-        if self.pert is not None and self.x_o is not None:
-            idx = np.argmin(np.abs(self.x - self.x_o))
-            self.e[idx] += self.pert(self.t + self.dt / 2 + self.dx / 2 / C)
-
+        # 4. Actualizar H
         self.h -= r * (self.e[1:] - self.e[:-1])
+
+        # --- TF/SF: CORRECCIÓN PARA H ---
+        # Se aplica al nodo H justo antes de la frontera (fin de la región Scattered Field)
+        if self.pert is not None and self.x_o is not None:
+            idx_e = np.argmin(np.abs(self.x - self.x_o))
+            # Al actualizar H_SF, lee un E_TF. Debemos restar (sumar, por el signo de FDTD) 
+            # el E incidente que "contamina" el cálculo.
+            self.h[idx_e - 1] += r * self.pert(self.t + self.dt)
 
         self.t += self.dt
 
@@ -128,9 +134,9 @@ def run_panel_experiment(
     Run dual FDTD simulations (with and without panel) and record E-field
     time series at observation points on each side of the panel.
 
-    Uses a temporal H-field perturbation source (pert_dir=True) at pulse_x0
-    to generate the incident pulse. Since c=1, the spatial and temporal
-    widths of the Gaussian are equal.
+    Uses a temporal perturbation source with pert_dir=+1 at pulse_x0 to
+    generate an incident pulse travelling in the +x direction. Since c=1,
+    the spatial and temporal widths of the Gaussian are equal.
 
     Parameters
     ----------
@@ -154,10 +160,10 @@ def run_panel_experiment(
     else:
         total_d = panel_d
 
-    panel_left = panel_center - total_d / 2
+    panel_left  = panel_center - total_d / 2
     panel_right = panel_center + total_d / 2
 
-    obs_left_idx = np.argmin(np.abs(x - (panel_left - obs_offset)))
+    obs_left_idx  = np.argmin(np.abs(x - (panel_left  - obs_offset)))
     obs_right_idx = np.argmin(np.abs(x - (panel_right + obs_offset)))
 
     # Temporal Gaussian pulse: peaks at t0 = 4*sigma so it starts from ~zero
@@ -169,29 +175,29 @@ def run_panel_experiment(
 
     # ── Simulation WITH panel ──
     fdtd = FDTD1D(x, boundaries=('mur', 'mur'),
-                  x_o=pulse_x0, pert=pert_fn, pert_dir=True)
+                  x_o=pulse_x0, pert=pert_fn, pert_dir=+1)
     if layers is not None:
         fdtd.set_multilayer(panel_center, layers)
     else:
         fdtd.set_panel(panel_center, panel_d, eps_r, sigma)
 
     n_steps = round(t_final / fdtd.dt)
-    E_left_panel = np.zeros(n_steps)
+    E_left_panel  = np.zeros(n_steps)
     E_right_panel = np.zeros(n_steps)
     for i in range(n_steps):
         fdtd._step()
-        E_left_panel[i] = fdtd.e[obs_left_idx]
+        E_left_panel[i]  = fdtd.e[obs_left_idx]
         E_right_panel[i] = fdtd.e[obs_right_idx]
 
     # ── Reference simulation WITHOUT panel ──
     fdtd_ref = FDTD1D(x, boundaries=('mur', 'mur'),
-                      x_o=pulse_x0, pert=pert_fn, pert_dir=True)
+                      x_o=pulse_x0, pert=pert_fn, pert_dir=+1)
 
-    E_left_ref = np.zeros(n_steps)
+    E_left_ref  = np.zeros(n_steps)
     E_right_ref = np.zeros(n_steps)
     for i in range(n_steps):
         fdtd_ref._step()
-        E_left_ref[i] = fdtd_ref.e[obs_left_idx]
+        E_left_ref[i]  = fdtd_ref.e[obs_left_idx]
         E_right_ref[i] = fdtd_ref.e[obs_right_idx]
 
     # ── Extract R(f), T(f) via FFT ──
@@ -216,9 +222,9 @@ def compute_RT_fdtd(E_left_panel, E_left_ref, E_right_panel, E_right_ref, dt):
     T = FFT(E_transmitted) / FFT(E_incident)
     """
     n = len(E_left_panel)
-    E_ref_fft = np.fft.rfft(E_left_panel - E_left_ref)
+    E_ref_fft   = np.fft.rfft(E_left_panel - E_left_ref)
     E_trans_fft = np.fft.rfft(E_right_panel)
-    E_inc_fft = np.fft.rfft(E_right_ref)
+    E_inc_fft   = np.fft.rfft(E_right_ref)
     freq = np.fft.rfftfreq(n, d=dt)
 
     valid = np.abs(E_inc_fft) > 1e-10 * np.max(np.abs(E_inc_fft))
