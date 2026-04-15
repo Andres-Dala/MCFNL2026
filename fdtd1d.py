@@ -56,12 +56,12 @@ class FDTD1D:
 
     def _step(self):
         r = self.dt / self.dx
-
         self.eps = self.eps0 * self.eps_r
 
         ca = (2 * self.eps - self.sig * self.dt) / (2 * self.eps + self.sig * self.dt)
         cb = (2 * self.dt / self.dx) / (2 * self.eps + self.sig * self.dt)
 
+        # 1. Guardar valores para Mur
         if self.boundaries is not None:
             if self.boundaries[0] == 'mur':
                 e_old_left_0 = self.e[0]
@@ -70,17 +70,25 @@ class FDTD1D:
                 e_old_right_0 = self.e[-1]
                 e_old_right_1 = self.e[-2]
 
-        if self.pert_dir and self.pert is not None and self.x_o is not None and self.t != 0.0:
-            idx = np.argmin(np.abs(self.xH - self.x_o))
-            self.h[idx] += self.pert(self.t)
-
+        # 2. Actualizar E
         self.e[1:-1] = ca[1:-1] * self.e[1:-1] - cb[1:-1] * (self.h[1:] - self.h[:-1])
 
+        # --- CORRECCIÓN PARA E ---
+
+        if self.pert is not None and self.x_o is not None:
+            idx_e = np.argmin(np.abs(self.x - self.x_o))
+            val_pert = self.pert(self.t + self.dt)
+            
+            if self.pert_dir: 
+                self.e[idx_e] += cb[idx_e] * val_pert
+            else: 
+                self.e[idx_e] += val_pert
+
+
+        # 3. Aplicar condiciones de contorno
         if self.boundaries is not None:
-            if self.boundaries[0] == 'PEC':
-                self.e[0] = 0.0
-            if self.boundaries[1] == 'PEC':
-                self.e[-1] = 0.0
+            if self.boundaries[0] == 'PEC': self.e[0] = 0.0
+            if self.boundaries[1] == 'PEC': self.e[-1] = 0.0
             if self.boundaries[0] == 'periodic':
                 self.e[0] = ca[0] * self.e[0] - cb[0] * (self.h[0] - self.h[-1])
                 self.e[-1] = self.e[0]
@@ -90,16 +98,23 @@ class FDTD1D:
             if self.boundaries[1] == 'mur':
                 mur_coeff = (C * self.dt - self.dx) / (C * self.dt + self.dx)
                 self.e[-1] = e_old_right_1 + mur_coeff * (self.e[-2] - e_old_right_0)
-            if self.boundaries[0] == 'PMC':
-                self.e[0] -= 2 * r * self.h[0]
-            if self.boundaries[1] == 'PMC':
-                self.e[-1] += 2 * r * self.h[-1]
+            if self.boundaries[0] == 'PMC': self.e[0] -= 2 * r * self.h[0]
+            if self.boundaries[1] == 'PMC': self.e[-1] += 2 * r * self.h[-1]
 
-        if self.pert is not None and self.x_o is not None:
-            idx = np.argmin(np.abs(self.x - self.x_o))
-            self.e[idx] += self.pert(self.t + self.dt / 2 + self.dx / 2 / C)
-
+        # 4. Actualizar H
         self.h -= r * (self.e[1:] - self.e[:-1])
+
+        # --- CORRECCIÓN PARA H ---
+        if self.pert is not None and self.x_o is not None and self.pert_dir:
+            idx_e = np.argmin(np.abs(self.x - self.x_o))
+            val_pert = self.pert(self.t + self.dt)
+            
+            if self.pert_dir == +1:
+                self.h[idx_e - 1] += r * val_pert
+            elif self.pert_dir == -1:
+                self.h[idx_e] -= r * val_pert
+                
+
 
         self.t += self.dt
 
