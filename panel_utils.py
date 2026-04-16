@@ -65,35 +65,13 @@ def reflection_transmission_stack(freq, layers):
     Phi = stack_transfer_matrix(freq, layers)
     return RT_from_transfer_matrix(Phi)
 
-# ── Panel experiment helpers ──
-
 def run_panel_experiment(
     N=4001, L=4.0, panel_center=None, panel_d=0.2,
     eps_r=4.0, sigma=0.5, layers=None,
     pulse_x0=0.8, pulse_sigma=0.06,
     t_final=None, obs_offset=0.4,
 ):
-    """
-    Run dual FDTD simulations (with and without panel) and record E-field
-    time series at observation points on each side of the panel.
 
-    Uses a temporal H-field perturbation source (pert_dir=True) at pulse_x0
-    to generate the incident pulse. Since c=1, the spatial and temporal
-    widths of the Gaussian are equal.
-
-    Parameters
-    ----------
-    layers : list of dict or None
-        If provided, use set_multilayer(). Otherwise use set_panel() with
-        eps_r, sigma, panel_d.
-
-    Returns
-    -------
-    dict with keys: 'freq', 'R', 'T', 'dt', 'n_steps',
-                    'E_left_panel', 'E_left_ref',
-                    'E_right_panel', 'E_right_ref',
-                    'panel_left', 'panel_right'
-    """
     x = np.linspace(0, L, N)
     if panel_center is None:
         panel_center = L / 2
@@ -158,12 +136,6 @@ def run_panel_experiment(
 
 
 def compute_RT_fdtd(E_left_panel, E_left_ref, E_right_panel, E_right_ref, dt):
-    """
-    Extract R(f) and T(f) from time-domain observation signals via FFT.
-
-    R = FFT(E_reflected) / FFT(E_incident)
-    T = FFT(E_transmitted) / FFT(E_incident)
-    """
     n = len(E_left_panel)
     E_ref_fft = np.fft.rfft(E_left_panel - E_left_ref)
     E_trans_fft = np.fft.rfft(E_right_panel)
